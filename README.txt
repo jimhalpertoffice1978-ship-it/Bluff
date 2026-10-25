@@ -1,4 +1,4 @@
-JOKER BLUFF - Las Vegas casino design (Stage 3e)
+JOKER BLUFF - Las Vegas casino design
 
 1) Check everything works:     npm test      (expect: fail 0)
 2) Start the game:             npm start
