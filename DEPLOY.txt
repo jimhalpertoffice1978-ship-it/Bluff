@@ -1,0 +1,46 @@
+PUTTING BLUFF ONLINE FOR FREE (Render)
+======================================
+
+Result: a permanent link like https://bluff-xxxx.onrender.com that you can send to friends.
+
+Things to know first
+- The free server goes to sleep after 15 minutes with no activity. The next person to open
+  the link waits about a minute while it wakes up. Games in progress are not affected,
+  because players' connections keep it awake.
+- Games live in the server's memory. If Render restarts the server (it may do so at any
+  time on the free plan) or you upload a new version, running games and rooms are lost.
+  Players just create a new room.
+
+PART A - Put the files on GitHub (no Git program needed, all in the browser)
+1. Create a free account at github.com.
+2. Click the + at the top right, then "New repository". Name it bluff. Click "Create repository".
+3. On the next page click the link "uploading an existing file".
+4. Open your bluff folder on your computer. Select EVERYTHING inside it
+   (the src folder, public folder, test folder, package.json, render.yaml, and the .txt files)
+   and drag it into the GitHub page.
+   Do NOT drag the outer "bluff" folder itself; drag what is inside it.
+5. Wait for the upload to finish, then click "Commit changes".
+
+PART B - Start it on Render
+1. Go to render.com and sign up with your GitHub account.
+2. Click New, then Web Service, and choose your bluff repository.
+3. Check these settings (render.yaml fills most of them in):
+     Language / Runtime ... Node
+     Build Command ........ npm install
+     Start Command ........ npm start
+     Instance Type ........ Free
+     Health Check Path .... /healthz   (under Advanced)
+4. Click Create Web Service and wait a few minutes. When it says "Live", open the link
+   shown at the top. That is your game's permanent address.
+
+PART C - Play
+1. Open the link, create a room, add a Meet link, and send the invite link to friends.
+
+UPDATING LATER
+- On GitHub open the file you want to change (or use Add file, then Upload files to replace it).
+  Render redeploys automatically after each change.
+
+OPTIONAL - keep it from sleeping
+- A free monitor such as UptimeRobot can open https://YOUR-LINK/healthz every 5 minutes so the
+  first visitor never waits. The free plan gives 750 hours a month, which covers one service
+  running all month.
