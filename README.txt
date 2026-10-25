@@ -1,4 +1,4 @@
-BLUFF - Stage 3c: table interface, Google Meet link, locked stack rank
+JOKER BLUFF - Las Vegas casino design (Stage 3e)
 
 1) Check everything works:     npm test      (expect: fail 0)
 2) Start the game:             npm start

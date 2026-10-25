@@ -163,6 +163,30 @@ test('the rank is free again after a full round of skips', () => {
   assert.equal(s.stackRank, '2');
 });
 
+// ---------- no checking your own play after everyone skipped
+
+test('when everyone skips and the turn returns to the last player, they cannot check; they can play again or skip', () => {
+  let s = make([['5', '5', '6'], ['2', '2'], ['3', '3']]);
+  s = act(s, 'p0', playRanks(s, 'p0', ['5'], '5'));
+  s = act(s, 'p1', { type: 'skip' });
+  s = act(s, 'p2', { type: 'skip' });
+  assert.equal(s.turn, 'p0');
+  const r = applyAction(s, 'p0', { type: 'check' });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /own play/);
+  const v = viewFor(s, 'p0').you;
+  assert.equal(v.canCheck, false);
+  assert.equal(v.canSkip, true);
+  assert.equal(viewFor(s, 'p1').you.canCheck, false); // not their turn
+  const again = act(s, 'p0', playRanks(s, 'p0', ['5'], '5')); // playing again is allowed
+  assert.equal(again.stack.length, 2);
+  assert.equal(again.turn, 'p1');
+  assert.equal(viewFor(again, 'p1').you.canCheck, true); // the next player can check as usual
+  const cleared = act(s, 'p0', { type: 'skip' }); // skipping clears the stack
+  assert.equal(cleared.stack.length, 0);
+  assert.equal(cleared.stackRank, null);
+});
+
 // ---------- privacy
 
 test('checked cards are revealed only to the loser', () => {
@@ -311,7 +335,7 @@ test('bot simulation: random games always end and never lose or duplicate a card
       const me = P(s, id);
       const r = rng(100);
       let action;
-      if (s.stack.length > 0 && r < 25) action = { type: 'check' };
+      if (s.stack.length > 0 && r < 25 && s.lastPlay.playerId !== id) action = { type: 'check' };
       else if (s.stack.length > 0 && r < 50) action = { type: 'skip' };
       else {
         const k = 1 + rng(Math.min(4, me.hand.length));

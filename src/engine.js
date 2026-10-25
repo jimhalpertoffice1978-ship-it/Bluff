@@ -183,6 +183,7 @@ export function applyAction(state, playerId, action) {
 
     case 'check': {
       if (starting || !state.lastPlay) return fail('There is nothing to check.');
+      if (state.lastPlay.playerId === playerId) return fail('Everyone skipped, so you cannot call bluff on your own play. Play more cards or skip.');
       const s = clone(state);
       const { playerId: accusedId, rank, count, cards } = s.lastPlay;
       const accused = findPlayer(s, accusedId);
@@ -301,7 +302,7 @@ export function viewFor(state, viewerId) {
           hand: me.hand,
           canPlay: myTurn,
           canSkip: myTurn && state.stack.length > 0,
-          canCheck: myTurn && state.stack.length > 0,
+          canCheck: myTurn && state.stack.length > 0 && !!state.lastPlay && state.lastPlay.playerId !== viewerId,
         }
       : null,
   };

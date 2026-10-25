@@ -21,6 +21,8 @@ let selected = new Set();
 let declRank = 'A';
 let rankTouched = false;
 let homeName = '';
+let peek = false;
+let mascotTimer = null;
 let meetDraft = null; // text typed in the lobby's Meet field, kept across re-renders
 let homeCode = (new URLSearchParams(location.search).get('room') || '').toUpperCase().slice(0, 5);
 let muted = false;
@@ -30,6 +32,7 @@ try { muted = localStorage.getItem('bluff.muted') === '1'; } catch { /* storage 
 let gameBuilt = false;
 let els = {};
 let seatEls = {};
+let bulbEls = [];
 let lastHandSig = '';
 let lastPileCount = -1;
 let revealTimers = [];
@@ -110,6 +113,8 @@ function tone(freq, dur = 0.12, type = 'sine', gain = 0.08, delay = 0, slide = 0
 }
 const sfx = {
   play() { tone(230, 0.08, 'triangle', 0.14, 0, -90); },
+  honk() { tone(420, 0.12, 'square', 0.09, 0, -80); tone(340, 0.2, 'square', 0.09, 0.13, -40); },
+  thud() { tone(120, 0.22, 'sine', 0.3, 0, -70); tone(1760, 0.09, 'triangle', 0.05, 0.03); tone(2349, 0.12, 'triangle', 0.04, 0.09); },
   skip() { tone(310, 0.07, 'sine', 0.06); },
   turn() { tone(660, 0.14, 'sine', 0.09); tone(880, 0.22, 'sine', 0.09, 0.13); },
   lie() { tone(330, 0.55, 'sawtooth', 0.06, 0, -230); },
@@ -184,9 +189,11 @@ function renderHome() {
   const invited = homeCode.length === 5;
   root.innerHTML = `
   <div class="home">
-    <div class="fan">${cardFace('A', 'H')}${cardFace('K', 'S')}${cardFace('JOKER')}</div>
-    <h1>Bluff</h1>
-    <p class="lede">Play cards face down, say what they are, and let everyone else decide whether you are lying.</p>
+    <div class="marquee">
+      <img class="logo" src="/logo.png" alt="Joker Bluff">
+      <div class="suits" aria-hidden="true">♠<span class="r">♥</span>♣<span class="r">♦</span></div>
+      <p class="lede">Play cards face down, say what they are, and let everyone else decide whether you are lying.</p>
+    </div>
     <label class="label">Your name
       <input class="field" id="name" maxlength="20" autocomplete="nickname" placeholder="What should we call you?" value="${esc(homeName)}">
     </label>
@@ -271,12 +278,13 @@ function renderLobby() {
 function buildGame() {
   gameBuilt = true;
   seatEls = {};
+  bulbEls = [];
   lastHandSig = '';
   lastPileCount = -1;
   root.innerHTML = `
   <div class="game">
     <header class="topbar">
-      <div class="brand">Bluff</div>
+      <img class="brand-logo" src="/logo.png" alt="Joker Bluff">
       <button class="code-chip" data-a="copy" id="codeChip" title="Copy invite link"><span>Room</span><b></b></button>
       <div class="grow"></div>
       <span class="info" id="info"></span>
@@ -286,14 +294,15 @@ function buildGame() {
     </header>
     <main class="stage">
       <div class="table-wrap" id="tableWrap">
-        <div class="rim" id="rim"><div class="felt"></div></div>
-        <div class="center" id="center"><div class="pile" id="pile"></div><div class="claim" id="claim"></div></div>
+        <div class="rim" id="rim"><div class="felt"></div><div class="bulbs" id="bulbs"></div></div>
+        <div class="center" id="center"><div class="mascot grin" id="mascot"></div><div class="pile" id="pile"></div><div class="claim" id="claim"></div></div>
         <div id="seats"></div>
         <div class="reveal" id="reveal" hidden></div>
       </div>
     </main>
     <section class="dock" id="dock">
       <div class="status" id="status"></div>
+      <button class="peek-btn" data-a="peek" id="peekBtn">Peek at all my cards</button>
       <div class="hand" id="hand"></div>
       <div class="chips" id="chips">${RANKS.map((r) => `<button class="chip" data-a="rank" data-r="${r}" aria-label="Say they are ${RANK_NAME[r]}s">${r}</button>`).join('')}</div>
       <div class="actions">
@@ -362,6 +371,12 @@ function updateSeats() {
   const g = snap.game;
   const info = Object.fromEntries(snap.players.map((p) => [p.id, p]));
   const seen = new Set();
+  let nextId = null;
+  const ti = g.players.findIndex((p) => p.id === g.turn);
+  for (let k = 1; ti >= 0 && k < g.players.length; k++) {
+    const q = g.players[(ti + k) % g.players.length];
+    if (q.status === 'active') { nextId = q.id; break; }
+  }
   for (const p of g.players) {
     seen.add(p.id);
     let el = seatEls[p.id];
@@ -374,6 +389,7 @@ function updateSeats() {
     else if (p.status === 'removed') badge = 'Left';
     else if (!online) badge = 'Offline';
     el.classList.toggle('turn', g.turn === p.id && g.phase === 'playing');
+    el.classList.toggle('next', p.id === nextId && g.phase === 'playing');
     el.classList.toggle('me', p.id === snap.youId);
     el.classList.toggle('out', p.status === 'finished' || p.status === 'removed');
     el.classList.toggle('offline', !online && p.status !== 'removed');
@@ -401,23 +417,25 @@ function layoutSeats() {
   const n = ps.length;
   const meIdx = Math.max(0, ps.findIndex((p) => p.id === snap.youId));
   const crowd = n > 6;
-  let tileW = clamp(Math.floor(Math.min(w * (crowd ? 0.15 : 0.18), h * (crowd ? 0.3 : 0.36))), 46, 112);
-  let seatH = tileW * 0.75 + 26;
+  let tileW = clamp(Math.floor(Math.min(w * (crowd ? 0.105 : 0.12), h * (crowd ? 0.19 : 0.23))), 40, 96);
+  let seatH = tileW * 1.1 + 26;
   let rx = 0;
   let ry = 0;
   // Shrink the seats until neighbours on the steep sides of the oval no longer overlap.
   for (let i = 0; i < 4; i++) {
-    rx = Math.max(60, w / 2 - tileW / 2 - 4);
+    rx = Math.max(60, w / 2 - tileW / 2 - 20); // leave room for the wider name plates
     ry = Math.max(50, h / 2 - seatH / 2 - 4);
     const room = 2 * ry * Math.sin(Math.PI / n) * 0.94 - 26;
-    const fit = clamp(Math.floor(room / 0.75), 46, tileW);
+    const fit = clamp(Math.floor(room / 1.1), 44, tileW);
     if (fit >= tileW) break;
     tileW = fit;
-    seatH = tileW * 0.75 + 26;
+    seatH = tileW * 1.1 + 26;
   }
+  rx = Math.min(rx, ry * 2.7); // an oval, but never absurdly wide
   els.wrap.style.setProperty('--tile-w', `${tileW}px`);
   Object.assign(els.rim.style, { left: `${w / 2 - rx}px`, top: `${h / 2 - ry}px`, width: `${rx * 2}px`, height: `${ry * 2}px` });
-  els.wrap.style.setProperty('--pile-w', `${clamp(Math.floor(Math.min(rx * 0.3, ry * 0.5)), 40, 92)}px`);
+  layoutBulbs(rx, ry);
+  els.wrap.style.setProperty('--pile-w', `${clamp(Math.floor(Math.min(rx * 0.14, ry * 0.26)), 32, 60)}px`);
   for (let k = 0; k < n; k++) {
     const p = ps[(meIdx + k) % n];
     const el = seatEls[p.id];
@@ -427,6 +445,33 @@ function layoutSeats() {
     el.style.top = `${h / 2 + ry * Math.sin(a)}px`;
     el.style.zIndex = String(10 + Math.round(Math.sin(a) * 5));
   }
+}
+
+// Marquee bulbs around the table rim; they alternate so the ring appears to chase.
+function layoutBulbs(rx, ry) {
+  const holder = $('#bulbs');
+  if (!holder) return;
+  const ring = clamp(Math.round(Math.min(rx, ry) * 0.12), 16, 30);
+  els.rim.style.setProperty('--ring', `${ring}px`);
+  const a = rx - ring / 2;
+  const b = ry - ring / 2;
+  const perimeter = Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
+  let n = Math.round(perimeter / (ring * 1.1));
+  n = clamp(n - (n % 2), 24, 90);
+  while (bulbEls.length < n) {
+    const d = document.createElement('i');
+    d.className = 'bulb';
+    holder.appendChild(d);
+    bulbEls.push(d);
+  }
+  while (bulbEls.length > n) bulbEls.pop().remove();
+  holder.style.setProperty('--bulb', `${Math.max(6, Math.round(ring * 0.4))}px`);
+  bulbEls.forEach((el, i) => {
+    const t = (i / n) * 2 * Math.PI;
+    el.style.left = `${rx + a * Math.cos(t)}px`;
+    el.style.top = `${ry + b * Math.sin(t)}px`;
+    el.classList.toggle('b', i % 2 === 1);
+  });
 }
 
 function updatePile(nm) {
@@ -455,6 +500,7 @@ function updateStatus(nm) {
   const me = g.players.find((p) => p.id === snap.youId);
   let text;
   if (g.phase === 'ended') text = 'Game over';
+  else if (you && you.canPlay && g.stackSize && !you.canCheck) text = `Everyone skipped. Play more ${rankLabel(g.stackRank, 2)} or skip to clear the stack.`;
   else if (you && you.canPlay) text = g.stackSize ? `Your turn. Play ${rankLabel(g.stackRank, 2)}, skip, or call bluff.` : 'Your turn. Start a new stack and pick its rank.';
   else if (me && me.status === 'pending') text = 'That was your last card. Waiting to see if anyone calls bluff.';
   else if (me && me.status === 'finished') text = `You finished ${ord(g.finishedOrder.indexOf(snap.youId) + 1)}. Watching the rest.`;
@@ -481,7 +527,10 @@ function updateHand() {
   const you = g.you;
   const active = you && g.phase === 'playing' && g.players.find((p) => p.id === snap.youId).status === 'active';
   els.hand.hidden = !active;
-  els.chips.hidden = !active;
+  els.hand.classList.toggle('peek', peek);
+  $('#peekBtn').hidden = !active;
+  $('#mascot').dataset.ready || setMascot('grin');
+  els.chips.hidden = !active || !!g.stackRank; // the rank is fixed once a stack has started
   els.btnPlay.parentElement.hidden = !active;
   if (!active) return;
   const hand = [...you.hand].sort((a, b) => (a.rank === 'JOKER' ? 99 : RANKS.indexOf(a.rank)) - (b.rank === 'JOKER' ? 99 : RANKS.indexOf(b.rank)));
@@ -558,7 +607,52 @@ function updateResults(nm) {
 
 function centerOf(el) { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
 
-function fly(fromEl, toEl, count, delay = 0) {
+function sparkle(x, y) {
+  if (reduceMotion) return;
+  for (let i = 0; i < 9; i++) {
+    const s = document.createElement('div');
+    s.className = 'spark';
+    fx.appendChild(s);
+    const ang = (i / 9) * 6.283 + Math.random() * 0.5;
+    const d = 26 + Math.random() * 26;
+    s.animate([{ transform: `translate(${x}px,${y}px) scale(.4)`, opacity: 1 }, { transform: `translate(${x + Math.cos(ang) * d}px,${y + Math.sin(ang) * d}px) scale(1.1)`, opacity: 0 }], { duration: 520 + Math.random() * 200, easing: 'ease-out' }).onfinish = () => s.remove();
+  }
+}
+
+function landFx() {
+  const c = centerOf(els.pile);
+  els.pile.classList.remove('thud');
+  void els.pile.offsetWidth;
+  els.pile.classList.add('thud');
+  sparkle(c.x, c.y);
+  sfx.thud();
+}
+
+function jokerSvg(e) {
+  const eyes = {
+    grin: '<ellipse cx="46" cy="62" rx="5" ry="6" fill="#2a1a3a"/><path d="M66 63q7-8 14 0" stroke="#2a1a3a" stroke-width="3.5" fill="none" stroke-linecap="round"/>',
+    shock: '<circle cx="46" cy="61" r="8" fill="#fff" stroke="#2a1a3a" stroke-width="2.5"/><circle cx="74" cy="61" r="8" fill="#fff" stroke="#2a1a3a" stroke-width="2.5"/><circle cx="46" cy="62" r="3" fill="#2a1a3a"/><circle cx="74" cy="62" r="3" fill="#2a1a3a"/>',
+    happy: '<path d="M39 64q7-9 14 0M67 64q7-9 14 0" stroke="#2a1a3a" stroke-width="3.5" fill="none" stroke-linecap="round"/>',
+  };
+  const mouth = {
+    grin: '<path d="M40 80q20 22 40 0z" fill="#c4202f" stroke="#2a1a3a" stroke-width="2.5"/>',
+    shock: '<ellipse cx="60" cy="88" rx="7" ry="9" fill="#5a0f1a" stroke="#2a1a3a" stroke-width="2.5"/>',
+    happy: '<path d="M42 80q18 18 36 0" fill="none" stroke="#c4202f" stroke-width="5" stroke-linecap="round"/>',
+  };
+  return `<svg viewBox="0 0 120 120" aria-hidden="true"><path d="M28 50C8 40 6 12 22 6c3 14 12 22 24 26z" fill="#7b3fd1"/><path d="M92 50c20-10 22-38 6-44-3 14-12 22-24 26z" fill="#2fbf5f"/><path d="M40 34C46 14 56 8 60 6c4 2 14 8 20 28z" fill="#4b1f86"/><circle cx="22" cy="8" r="6" fill="#f2c14e"/><circle cx="98" cy="8" r="6" fill="#f2c14e"/><circle cx="60" cy="7" r="6" fill="#f2c14e"/><path d="M26 44h68v10H26z" fill="#f2c14e"/><ellipse cx="26" cy="72" rx="12" ry="20" fill="#2fbf5f"/><ellipse cx="94" cy="72" rx="12" ry="20" fill="#2fbf5f"/><ellipse cx="60" cy="72" rx="32" ry="34" fill="#fff" stroke="#2a1a3a" stroke-width="3"/>${eyes[e] || eyes.grin}<circle cx="60" cy="72" r="5" fill="#d4202f"/>${mouth[e] || mouth.grin}<path d="M30 108q30 14 60 0l-6-12H36z" fill="#f4e3b0" stroke="#b9791c" stroke-width="2"/></svg>`;
+}
+
+function setMascot(e, hold = 3500) {
+  const m = $('#mascot');
+  if (!m) return;
+  m.dataset.ready = '1';
+  m.className = `mascot ${e}`;
+  m.innerHTML = jokerSvg(e);
+  clearTimeout(mascotTimer);
+  if (e !== 'grin') mascotTimer = setTimeout(() => setMascot('grin'), hold);
+}
+
+function fly(fromEl, toEl, count, delay = 0, land = false) {
   if (reduceMotion || !fromEl || !toEl) return;
   const a = centerOf(fromEl);
   const b = centerOf(toEl);
@@ -572,7 +666,7 @@ function fly(fromEl, toEl, count, delay = 0) {
       { opacity: 1, offset: 0.25 },
       { transform: `translate(${b.x - 17}px, ${b.y - 24}px) rotate(${(i % 3) * 7 - 7}deg) scale(1)`, opacity: 1 },
     ], { duration: 460 + i * 70, delay: delay + i * 70, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'both' });
-    anim.onfinish = () => c.remove();
+    anim.onfinish = () => { c.remove(); if (land && i === Math.min(count, 6) - 1) landFx(); };
   }
 }
 
@@ -580,8 +674,8 @@ function detectEvents(prev, nm) {
   const pg = prev.game;
   const g = snap.game;
   if (g.stackSize > pg.stackSize && g.lastPlay) {
-    fly(seatEls[g.lastPlay.playerId], els.pile, g.lastPlay.count);
-    sfx.play();
+    fly(seatEls[g.lastPlay.playerId], els.pile, g.lastPlay.count, 0, true);
+    setMascot('grin');
   } else if (pg.lastPlay && !g.lastPlay && g.lastCheck) {
     showReveal(g.lastCheck, nm);
   } else if (pg.lastPlay && !g.lastPlay && !g.lastCheck && pg.phase === 'playing') {
@@ -589,6 +683,7 @@ function detectEvents(prev, nm) {
   } else if (g.lastPlay && pg.turn !== g.turn && g.stackSize === pg.stackSize) {
     sfx.skip();
   }
+  if (g.finishedOrder.length > pg.finishedOrder.length || (g.phase === 'ended' && pg.phase !== 'ended')) setMascot('happy', 6000);
   if (g.turn === snap.youId && pg.turn !== snap.youId && g.phase === 'playing') sfx.turn();
 }
 
@@ -610,9 +705,11 @@ function showReveal(lc, nm) {
     el.innerHTML = `<div class="rv-verdict ${lc.truthful ? 'truth' : 'lie'}">${lc.truthful ? 'Truth!' : 'Bluff!'}</div>
       <div>${lc.truthful ? `Every card was a ${esc(RANK_NAME[lc.declaredRank])} or a Joker.` : `Not all of those were ${esc(word)}.`}</div>
       <div class="rv-claim">${esc(nm(lc.loserId))} picks up ${lc.pickedUp} card${lc.pickedUp === 1 ? '' : 's'}</div>
-      ${mine ? `<div class="rv-cards">${mine.map((c) => c.rank === 'JOKER' ? '<span class="mini joker">★</span>' : `<span class="mini ${c.suit === 'H' || c.suit === 'D' ? 'red' : ''}">${c.rank}${SUIT[c.suit]}</span>`).join('')}<small>Only you can see these cards.</small></div>`
+      ${mine ? `<div class="rv-cards">${mine.map((c) => c.rank === 'JOKER' ? '<span class="mini joker pop">★</span>' : `<span class="mini ${c.suit === 'H' || c.suit === 'D' ? 'red' : ''}">${c.rank}${SUIT[c.suit]}</span>`).join('')}<small>Only you can see these cards.</small></div>`
         : `<small>Only ${esc(nm(lc.loserId))} sees the cards.</small>`}`;
     (lc.truthful ? sfx.truth : sfx.lie)();
+    setMascot(lc.truthful ? 'grin' : 'shock');
+    if (mine && mine.some((c) => c.rank === 'JOKER')) setTimeout(sfx.honk, 350); // only the loser sees the cards, so only they get the Joker gag
     fly(els.pile, seatEls[lc.loserId], lc.pickedUp);
   }, wait));
   revealTimers.push(setTimeout(() => { el.hidden = true; }, wait + (mine ? 6500 : 3800)));
@@ -721,6 +818,7 @@ document.addEventListener('click', async (e) => {
       updateHand();
       updateControls();
       break;
+    case 'peek': peek = !peek; els.hand.classList.toggle('peek', peek); b.textContent = peek ? 'Hide my cards' : 'Peek at all my cards'; break;
     case 'skip': send({ type: 'skip' }); break;
     case 'check': send({ type: 'check' }); break;
     default: break;
