@@ -295,7 +295,7 @@ function buildGame() {
     <main class="stage">
       <div class="table-wrap" id="tableWrap">
         <div class="rim" id="rim"><div class="felt"></div><div class="bulbs" id="bulbs"></div></div>
-        <div class="center" id="center"><div class="mascot grin" id="mascot"></div><div class="pile" id="pile"></div><div class="claim" id="claim"></div></div>
+        <div class="center" id="center"><div class="pile" id="pile"></div><div class="claim" id="claim"></div></div>
         <div id="seats"></div>
         <div class="reveal" id="reveal" hidden></div>
       </div>
@@ -315,7 +315,7 @@ function buildGame() {
   </div>`;
   els = {
     wrap: $('#tableWrap'), rim: $('#rim'), pile: $('#pile'), claim: $('#claim'), seats: $('#seats'),
-    reveal: $('#reveal'), status: $('#status'), hand: $('#hand'), chips: $('#chips'), dock: $('#dock'),
+    center: $('#center'), reveal: $('#reveal'), status: $('#status'), hand: $('#hand'), chips: $('#chips'), dock: $('#dock'),
     btnPlay: $('#btnPlay'), btnSkip: $('#btnSkip'), btnCheck: $('#btnCheck'), results: $('#results'),
     info: $('#info'), chip: $('#codeChip'), sound: $('#soundBtn'),
   };
@@ -434,8 +434,8 @@ function layoutSeats() {
   rx = Math.min(rx, ry * 2.7); // an oval, but never absurdly wide
   els.wrap.style.setProperty('--tile-w', `${tileW}px`);
   Object.assign(els.rim.style, { left: `${w / 2 - rx}px`, top: `${h / 2 - ry}px`, width: `${rx * 2}px`, height: `${ry * 2}px` });
-  layoutBulbs(rx, ry);
-  els.wrap.style.setProperty('--pile-w', `${clamp(Math.floor(Math.min(rx * 0.14, ry * 0.26)), 32, 60)}px`);
+  const ring = layoutBulbs(rx, ry);
+  els.wrap.style.setProperty('--pile-w', `${clamp(Math.floor(Math.min(rx * 0.2, ry * 0.5)), 44, 100)}px`);
   for (let k = 0; k < n; k++) {
     const p = ps[(meIdx + k) % n];
     const el = seatEls[p.id];
@@ -445,12 +445,26 @@ function layoutSeats() {
     el.style.top = `${h / 2 + ry * Math.sin(a)}px`;
     el.style.zIndex = String(10 + Math.round(Math.sin(a) * 5));
   }
+
+  // Keep the pile and the claim between the seats at the top and bottom of the table.
+  const ctr = els.center;
+  if (ctr) {
+    ctr.style.transform = 'translate(-50%, -50%)'; // measure at natural size
+    const tileH = tileW * 1.1;
+    const bottomLimit = h / 2 + ry - tileH / 2 - 18; // top edge of my own seat, plus room for its chip
+    let topLimit = h / 2 - ry + ring + 8;
+    if (n % 2 === 0) topLimit = Math.max(topLimit, h / 2 - ry + tileH / 2 + 34); // a seat sits at the very top
+    const avail = Math.max(60, bottomLimit - topLimit);
+    const scale = clamp(avail / Math.max(1, ctr.offsetHeight), 0.5, 1);
+    ctr.style.top = `${topLimit + avail / 2}px`;
+    ctr.style.transform = `translate(-50%, -50%) scale(${scale.toFixed(3)})`;
+  }
 }
 
 // Marquee bulbs around the table rim; they alternate so the ring appears to chase.
 function layoutBulbs(rx, ry) {
   const holder = $('#bulbs');
-  if (!holder) return;
+  if (!holder) return 16;
   const ring = clamp(Math.round(Math.min(rx, ry) * 0.12), 16, 30);
   els.rim.style.setProperty('--ring', `${ring}px`);
   const a = rx - ring / 2;
@@ -472,6 +486,7 @@ function layoutBulbs(rx, ry) {
     el.style.top = `${ry + b * Math.sin(t)}px`;
     el.classList.toggle('b', i % 2 === 1);
   });
+  return ring;
 }
 
 function updatePile(nm) {
@@ -529,7 +544,6 @@ function updateHand() {
   els.hand.hidden = !active;
   els.hand.classList.toggle('peek', peek);
   $('#peekBtn').hidden = !active;
-  $('#mascot').dataset.ready || setMascot('grin');
   els.chips.hidden = !active || !!g.stackRank; // the rank is fixed once a stack has started
   els.btnPlay.parentElement.hidden = !active;
   if (!active) return;
