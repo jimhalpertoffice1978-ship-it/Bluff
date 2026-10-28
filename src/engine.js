@@ -43,6 +43,16 @@ const fail = (error) => ({ ok: false, error });
 const findPlayer = (s, id) => s.players.find((p) => p.id === id);
 const activeCount = (s) => s.players.filter((p) => p.status === 'active').length;
 
+// The move history. It records only what every player already sees at the table
+// (claims, skips, bluff calls and how they turned out), never the cards themselves.
+const MAX_LOG = 400;
+function log(s, entry) {
+  if (!s.log) s.log = [];
+  s.logSeq = (s.logSeq || 0) + 1;
+  s.log.push({ i: s.logSeq, ...entry });
+  if (s.log.length > MAX_LOG) s.log.shift();
+}
+
 // Next player with status 'active' after `id` in seating order (clockwise).
 function nextActiveAfter(s, id, inclusive = false) {
   const n = s.players.length;
@@ -61,6 +71,7 @@ function confirmPending(s) {
   p.status = 'finished';
   s.finishedOrder.push(p.id);
   s.pendingOutId = null;
+  log(s, { t: 'out', id: p.id, place: s.finishedOrder.length });
 }
 
 // Game ends when at most one player still holds cards (and nobody is pending).
@@ -71,6 +82,7 @@ function endIfOver(s) {
     s.phase = 'ended';
     s.turn = null;
     s.loserId = holders.length === 1 ? holders[0].id : null;
+    log(s, { t: 'end', loser: s.loserId });
     return true;
   }
   return false;
@@ -85,6 +97,7 @@ function resetStackBySkips(s) {
   s.lastPlay = null;
   s.skipsInRow = 0;
   s.turn = nextActiveAfter(s, lastPlayerId);
+  log(s, { t: 'reset' });
 }
 
 // ---------------------------------------------------------------- setup
@@ -123,6 +136,8 @@ export function createGame(players, options = {}) {
     loserId: null,
     setAside: deck.slice(perPlayer * n), // leftovers, never revealed
     lastCheck: null,
+    log: [{ i: 1, t: 'start', n }], // a new game always starts with a fresh history
+    logSeq: 1,
   };
 }
 
@@ -162,6 +177,7 @@ export function applyAction(state, playerId, action) {
       s.lastPlay = { playerId, rank: action.rank, count: played.length, cards: played };
       s.skipsInRow = 0;
       s.lastCheck = null;
+      log(s, { t: 'play', by: playerId, rank: action.rank, count: played.length, stack: s.stack.length, last: mine.hand.length === 0 });
       if (mine.hand.length === 0) {
         mine.status = 'pending';
         s.pendingOutId = playerId;
@@ -175,6 +191,7 @@ export function applyAction(state, playerId, action) {
       const s = clone(state);
       confirmPending(s);
       if (endIfOver(s)) return { ok: true, state: s };
+      log(s, { t: 'skip', by: playerId });
       s.skipsInRow += 1;
       if (s.skipsInRow >= activeCount(s)) resetStackBySkips(s);
       else s.turn = nextActiveAfter(s, playerId);
@@ -210,6 +227,7 @@ export function applyAction(state, playerId, action) {
         revealed: cards,
       };
 
+      log(s, { t: 'check', by: playerId, on: accusedId, rank, count, truthful, loser: loser.id, picked: pickedUp });
       if (s.pendingOutId) {
         if (truthful) confirmPending(s);
         else {
@@ -240,6 +258,7 @@ export function removePlayer(state, playerId) {
   p.hand = [];
   if (s.pendingOutId === playerId) s.pendingOutId = null;
   p.status = 'removed';
+  log(s, { t: 'left', id: playerId });
 
   if (s.pendingOutId && activeCount(s) === 0) confirmPending(s); // nobody left to check them
   if (endIfOver(s)) return { ok: true, state: s };
@@ -266,6 +285,7 @@ export function viewFor(state, viewerId) {
   const myTurn = state.phase === 'playing' && state.turn === viewerId;
   const lc = state.lastCheck;
   return {
+    log: (state.log || []).slice(-200), // newest 200 moves
     phase: state.phase,
     deckCount: state.deckCount,
     totalCards: state.totalCards,

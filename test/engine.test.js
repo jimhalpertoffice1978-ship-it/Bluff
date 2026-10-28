@@ -306,6 +306,103 @@ test('autoAction skips when allowed, otherwise plays one card honestly', () => {
   assert.equal(s.lastCheck.truthful, true);
 });
 
+// ---------- the move history
+
+test('a new game starts with a fresh history holding only the start entry', () => {
+  const people = Array.from({ length: 3 }, (_, i) => ({ id: `p${i}`, name: `P${i}` }));
+  const g1 = createGame(people, {});
+  assert.equal(g1.log.length, 1);
+  assert.equal(g1.log[0].t, 'start');
+  assert.equal(g1.log[0].n, 3);
+  // play on a bit, then start another game: nothing carries over
+  const first = g1.players.find((p) => p.id === g1.turn);
+  const r = applyAction(g1, first.id, { type: 'play', cardIds: [first.hand[0].id], rank: 'K' });
+  assert.ok(r.ok);
+  assert.equal(r.state.log.length, 2);
+  const g2 = createGame(people, {});
+  assert.equal(g2.log.length, 1);
+});
+
+test('plays, skips and bluff calls are recorded in order with the claim and the stack size', () => {
+  let s = make([['K', 'K', '5'], ['3', '3', '9'], ['7', '7', '7']]);
+  s = act(s, 'p0', playRanks(s, 'p0', ['K', 'K'], 'K'));
+  s = act(s, 'p1', { type: 'skip' });
+  s = act(s, 'p2', playRanks(s, 'p2', ['7'], 'K')); // a lie
+  s = act(s, 'p0', { type: 'check' });
+  const kinds = s.log.map((e) => e.t);
+  assert.deepEqual(kinds, ['play', 'skip', 'play', 'check']);
+  assert.deepEqual(s.log[0], { i: 1, t: 'play', by: 'p0', rank: 'K', count: 2, stack: 2, last: false });
+  assert.equal(s.log[2].stack, 3);
+  const check = s.log[3];
+  assert.equal(check.by, 'p0');
+  assert.equal(check.on, 'p2');
+  assert.equal(check.truthful, false);
+  assert.equal(check.loser, 'p2');
+  assert.equal(check.picked, 3);
+  assert.deepEqual(s.log.map((e) => e.i), [1, 2, 3, 4]);
+});
+
+test('a truthful claim is logged as truthful, with the checker as the loser', () => {
+  let s = make([['K', '5'], ['3', '3', '9'], ['7', '7', '7']]);
+  s = act(s, 'p0', playRanks(s, 'p0', ['K'], 'K'));
+  s = act(s, 'p1', { type: 'check' });
+  const check = s.log.at(-1);
+  assert.equal(check.truthful, true);
+  assert.equal(check.loser, 'p1');
+});
+
+test('a full round of skips is logged as a reset', () => {
+  let s = make([['5', '6'], ['2', '2'], ['3', '3']]);
+  s = act(s, 'p0', playRanks(s, 'p0', ['5'], '5'));
+  s = act(s, 'p1', { type: 'skip' });
+  s = act(s, 'p2', { type: 'skip' });
+  s = act(s, 'p0', { type: 'skip' });
+  assert.deepEqual(s.log.map((e) => e.t), ['play', 'skip', 'skip', 'skip', 'reset']);
+});
+
+test('going out is recorded: the last cards are flagged and the finish is logged with its place', () => {
+  let s = make([['K'], ['3', '3'], ['4', '4']]);
+  s = act(s, 'p0', playRanks(s, 'p0', ['K'], 'K'));
+  assert.equal(s.log[0].last, true);
+  s = act(s, 'p1', { type: 'skip' });
+  const out = s.log.find((e) => e.t === 'out');
+  assert.deepEqual([out.id, out.place], ['p0', 1]);
+});
+
+test('the end of the game and a player leaving are recorded', () => {
+  let s = make([['K'], ['K'], ['4', '4']]);
+  s = act(s, 'p0', playRanks(s, 'p0', ['K'], 'K'));
+  s = act(s, 'p1', playRanks(s, 'p1', ['K'], 'K'));
+  s = act(s, 'p2', { type: 'skip' });
+  assert.equal(s.log.at(-1).t, 'end');
+  assert.equal(s.log.at(-1).loser, 'p2');
+  const t = removePlayer(make([['K', '5'], ['3', '3'], ['4', '4']]), 'p1').state;
+  assert.equal(t.log.at(-1).t, 'left');
+});
+
+test('the history never reveals a card: no ranks held, suits or card ids', () => {
+  let s = make([['K', '5', '5'], ['K', '9', '9'], ['7', '7', '7']]);
+  s = act(s, 'p0', playRanks(s, 'p0', ['5'], 'K')); // a lie: the log must say K, never 5
+  s = act(s, 'p1', playRanks(s, 'p1', ['K'], 'K'));
+  s = act(s, 'p2', { type: 'check' });
+  const allowed = new Set(['i', 't', 'by', 'on', 'rank', 'count', 'stack', 'last', 'truthful', 'loser', 'picked', 'id', 'place', 'n']);
+  for (const e of s.log) for (const key of Object.keys(e)) assert.ok(allowed.has(key), `unexpected key ${key}`);
+  for (const viewer of ['p0', 'p1', 'p2']) {
+    const text = JSON.stringify(viewFor(s, viewer).log);
+    assert.ok(!text.includes('suit') && !text.includes('cards') && !text.includes('cardIds'));
+  }
+  const bluffed = s.log.find((e) => e.t === 'play' && e.by === 'p0');
+  assert.equal(bluffed.rank, 'K');
+});
+
+test('the view sends only the newest 200 moves', () => {
+  const s = make([['K'], ['3'], ['4']]);
+  s.log = Array.from({ length: 450 }, (_, i) => ({ i: i + 1, t: 'skip', by: 'p0' }));
+  const v = viewFor(s, 'p0').log;
+  assert.equal(v.length, 200);
+  assert.equal(v.at(-1).i, 450);
+});
+
 // ---------- bot simulation: thousands of random games must always finish cleanly
 
 function seededRng(seed) {

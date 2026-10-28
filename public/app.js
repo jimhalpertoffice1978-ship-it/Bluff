@@ -31,6 +31,10 @@ try { muted = localStorage.getItem('bluff.muted') === '1'; } catch { /* storage 
 // game screen state
 let gameBuilt = false;
 let els = {};
+let histOpen = false; // the history drawer on narrow screens
+let histSeen = 0; // newest history entry the player has looked at
+let histKey = '';
+const wideMQ = window.matchMedia('(min-width: 1180px)'); // wide screens dock the history beside the table
 let seatEls = {};
 let bulbEls = [];
 let lastHandSig = '';
@@ -289,6 +293,7 @@ function buildGame() {
       <div class="grow"></div>
       <span class="info" id="info"></span>
       <span id="meetSlot"></span>
+      <button class="icon-btn hist-btn" data-a="history" id="histBtn">History<span class="dotbadge" id="histBadge" hidden></span></button>
       <button class="icon-btn" data-a="sound" id="soundBtn"></button>
       <button class="icon-btn" data-a="leave">Leave</button>
     </header>
@@ -312,13 +317,22 @@ function buildGame() {
       </div>
     </section>
     <div class="results" id="results" hidden></div>
+    <aside class="history" id="history" aria-label="Move history">
+      <div class="hist-head"><div><b>Move history</b><small>Clears when a new game starts</small></div><button class="hist-close" data-a="history" aria-label="Close history">✕</button></div>
+      <div class="hist-list" id="histList" aria-live="polite"></div>
+    </aside>
+    <div class="hist-backdrop" id="histBackdrop" data-a="history" hidden></div>
   </div>`;
   els = {
     wrap: $('#tableWrap'), rim: $('#rim'), pile: $('#pile'), claim: $('#claim'), seats: $('#seats'),
     center: $('#center'), reveal: $('#reveal'), status: $('#status'), hand: $('#hand'), chips: $('#chips'), dock: $('#dock'),
     btnPlay: $('#btnPlay'), btnSkip: $('#btnSkip'), btnCheck: $('#btnCheck'), results: $('#results'),
     info: $('#info'), chip: $('#codeChip'), sound: $('#soundBtn'),
+    hist: $('#history'), histList: $('#histList'), histBtn: $('#histBtn'), histBadge: $('#histBadge'), histBackdrop: $('#histBackdrop'),
   };
+  histOpen = false;
+  histSeen = 0;
+  histKey = '';
   new ResizeObserver(() => { if (gameBuilt) { layoutSeats(); layoutHand(); } }).observe(els.wrap);
 }
 
@@ -340,11 +354,88 @@ function updateGame(prev) {
   updateHand();
   updateControls();
   updateResults(nm);
+  updateHistory(nm);
   if (prev && prev.game && snap.rev === prev.rev + 1) detectEvents(prev, nm);
 
   const myTurn = g.turn === snap.youId && g.phase === 'playing';
   document.title = myTurn ? 'Your turn - Bluff' : 'Bluff';
 }
+
+// ------------------------------------------------------------------ move history
+
+function historyHtml(g, nm) {
+  const entries = g.log || [];
+  if (!entries.length) return '<div class="hist-empty">Moves will appear here as players make their claims.</div>';
+  const initial = (id) => esc(nm(id).charAt(0).toUpperCase());
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const out = [];
+  let newStack = true;
+  for (const e of entries) {
+    if ((e.t === 'play' || e.t === 'skip') && newStack) {
+      out.push('<div class="divider-stack">New stack</div>');
+      newStack = false;
+    }
+    switch (e.t) {
+      case 'start':
+        out.push(`<div class="sys">Game started with ${e.n} players. The history starts fresh.</div>`);
+        break;
+      case 'play':
+        out.push(`<div class="msg play ${e.by === snap.youId ? 'me' : ''}"><span class="av" style="--h:${hueFor(e.by)}">${initial(e.by)}</span><div class="bub"><b>${esc(nm(e.by))}</b> claims <em>${e.count} ${rankLabel(e.rank, e.count)}</em><small>Stack: ${plural(e.stack, 'card')}${e.last ? '. Last cards.' : ''}</small></div></div>`);
+        break;
+      case 'skip':
+        out.push(`<div class="msg skip ${e.by === snap.youId ? 'me' : ''}"><span class="av" style="--h:${hueFor(e.by)}">${initial(e.by)}</span><div class="bub"><b>${esc(nm(e.by))}</b> skipped</div></div>`);
+        break;
+      case 'check':
+        out.push(`<div class="sys check ${e.truthful ? 'truth' : 'bluff'}"><b>${esc(nm(e.by))}</b> called bluff on <b>${esc(nm(e.on))}</b> (${e.count} ${rankLabel(e.rank, e.count)}). <b class="${e.truthful ? 'tru' : 'lie'}">${e.truthful ? 'Truth!' : 'Bluff!'}</b> ${esc(nm(e.loser))} picked up ${plural(e.picked, 'card')}.</div>`);
+        newStack = true;
+        break;
+      case 'reset':
+        out.push('<div class="sys">Everyone skipped. The pile was set aside, unseen.</div>');
+        newStack = true;
+        break;
+      case 'out':
+        out.push(`<div class="sys">${esc(nm(e.id))} is out: ${ord(e.place)} place.</div>`);
+        break;
+      case 'end':
+        out.push(`<div class="sys">Game over.${e.loser ? ` ${esc(nm(e.loser))} is left holding cards.` : ''}</div>`);
+        break;
+      case 'left':
+        out.push(`<div class="sys">${esc(nm(e.id))} left the game.</div>`);
+        break;
+      default:
+        break;
+    }
+  }
+  return out.join('');
+}
+
+function updateHistory(nm) {
+  if (!els.hist) return;
+  const g = snap.game;
+  const entries = g.log || [];
+  const lastSeq = entries.length ? entries[entries.length - 1].i : 0;
+  const docked = wideMQ.matches;
+  const open = docked || histOpen;
+  els.hist.classList.toggle('open', open);
+  els.histBackdrop.hidden = !(histOpen && !docked);
+
+  const key = `${lastSeq}:${entries.length}`;
+  if (key !== histKey) {
+    const list = els.histList;
+    const stick = histKey === '' || list.scrollHeight - list.scrollTop - list.clientHeight < 70;
+    histKey = key;
+    list.innerHTML = historyHtml(g, nm);
+    if (stick) list.scrollTop = list.scrollHeight;
+  }
+
+  if (lastSeq < histSeen) histSeen = 0; // a new game has started: the numbering begins again
+  if (open) histSeen = lastSeq;
+  const unread = open ? 0 : entries.filter((e) => e.i > histSeen && (e.t === 'play' || e.t === 'skip' || e.t === 'check')).length;
+  els.histBadge.hidden = unread === 0;
+  els.histBadge.textContent = unread > 9 ? '9+' : String(unread);
+}
+
+wideMQ.addEventListener('change', () => { if (gameBuilt && snap && snap.game) updateHistory((id) => { const p = snap.players.find((x) => x.id === id); return p ? p.name : '?'; }); });
 
 function updateMeetSlot() {
   const isHost = snap.hostId === snap.youId;
@@ -806,6 +897,13 @@ document.addEventListener('click', async (e) => {
       if (snap && snap.phase === 'playing' && !confirm('Leave the game? Your cards will be set aside.')) return;
       send({ type: 'leave' });
       setTimeout(() => leaveLocal(''), 120);
+      break;
+    }
+    case 'history': {
+      histOpen = !histOpen;
+      const nm = (id) => { const p = snap.players.find((x) => x.id === id); return p ? p.name : '?'; };
+      updateHistory(nm);
+      if (histOpen) { const l = els.histList; l.scrollTop = l.scrollHeight; }
       break;
     }
     case 'sound':
